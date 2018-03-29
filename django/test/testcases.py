@@ -34,7 +34,6 @@ from django.test.utils import (
     override_settings,
 )
 from django.utils.decorators import classproperty
-from django.utils.encoding import force_text
 from django.views.static import serve
 
 __all__ = ('TestCase', 'TransactionTestCase',
@@ -339,7 +338,7 @@ class SimpleTestCase(unittest.TestCase):
         else:
             content = response.content
         if not isinstance(text, bytes) or html:
-            text = force_text(text, encoding=response.charset)
+            text = str(text)
             content = content.decode(response.charset)
             text_repr = "'%s'" % text
         else:
@@ -635,7 +634,7 @@ class SimpleTestCase(unittest.TestCase):
         if field_kwargs is None:
             field_kwargs = {}
         required = fieldclass(*field_args, **field_kwargs)
-        optional = fieldclass(*field_args, **dict(field_kwargs, required=False))
+        optional = fieldclass(*field_args, **{**field_kwargs, 'required': False})
         # test valid inputs
         for input, output in valid.items():
             self.assertEqual(required.clean(input), output)
@@ -650,7 +649,7 @@ class SimpleTestCase(unittest.TestCase):
                 optional.clean(input)
             self.assertEqual(context_manager.exception.messages, errors)
         # test required inputs
-        error_required = [force_text(required.error_messages['required'])]
+        error_required = [required.error_messages['required']]
         for e in required.empty_values:
             with self.assertRaises(ValidationError) as context_manager:
                 required.clean(e)
@@ -1056,7 +1055,7 @@ class CheckCondition:
         self.conditions = conditions
 
     def add_condition(self, condition, reason):
-        return self.__class__(*self.conditions + ((condition, reason),))
+        return self.__class__(*self.conditions, (condition, reason))
 
     def __get__(self, instance, cls=None):
         # Trigger access for all bases.

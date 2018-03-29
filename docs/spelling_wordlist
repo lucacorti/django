@@ -407,6 +407,7 @@ minified
 minify
 mis
 misconfiguration
+mitre
 mixin
 mixins
 modelforms
@@ -695,6 +696,7 @@ subviews
 subwidget
 subwidgets
 superclass
+superclasses
 superset
 swappable
 symlink
@@ -709,7 +711,6 @@ tagline
 tarball
 tarballs
 teardown
-templatetag
 templating
 testcase
 testserver

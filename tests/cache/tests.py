@@ -39,7 +39,7 @@ from django.utils import timezone, translation
 from django.utils.cache import (
     get_cache_key, learn_cache_key, patch_cache_control, patch_vary_headers,
 )
-from django.views.decorators.cache import cache_page
+from django.views.decorators.cache import cache_control, cache_page
 
 from .models import Poll, expensive_calculation
 
@@ -1084,9 +1084,14 @@ class PicklingSideEffect:
         self.locked = False
 
     def __getstate__(self):
-        if self.cache._lock.active_writers:
-            self.locked = True
+        self.locked = self.cache._lock.locked()
         return {}
+
+
+limit_locmem_entries = override_settings(CACHES=caches_setting_for_tests(
+    BACKEND='django.core.cache.backends.locmem.LocMemCache',
+    OPTIONS={'MAX_ENTRIES': 9},
+))
 
 
 @override_settings(CACHES=caches_setting_for_tests(
@@ -1143,6 +1148,47 @@ class LocMemCacheTests(BaseCacheTests, TestCase):
         self.assertEqual(expire, cache._expire_info[_key])
         cache.decr(key)
         self.assertEqual(expire, cache._expire_info[_key])
+
+    @limit_locmem_entries
+    def test_lru_get(self):
+        """get() moves cache keys."""
+        for key in range(9):
+            cache.set(key, key, timeout=None)
+        for key in range(6):
+            self.assertEqual(cache.get(key), key)
+        cache.set(9, 9, timeout=None)
+        for key in range(6):
+            self.assertEqual(cache.get(key), key)
+        for key in range(6, 9):
+            self.assertIsNone(cache.get(key))
+        self.assertEqual(cache.get(9), 9)
+
+    @limit_locmem_entries
+    def test_lru_set(self):
+        """set() moves cache keys."""
+        for key in range(9):
+            cache.set(key, key, timeout=None)
+        for key in range(3, 9):
+            cache.set(key, key, timeout=None)
+        cache.set(9, 9, timeout=None)
+        for key in range(3, 10):
+            self.assertEqual(cache.get(key), key)
+        for key in range(3):
+            self.assertIsNone(cache.get(key))
+
+    @limit_locmem_entries
+    def test_lru_incr(self):
+        """incr() moves cache keys."""
+        for key in range(9):
+            cache.set(key, key, timeout=None)
+        for key in range(6):
+            cache.incr(key)
+        cache.set(9, 9, timeout=None)
+        for key in range(6):
+            self.assertEqual(cache.get(key), key + 1)
+        for key in range(6, 9):
+            self.assertIsNone(cache.get(key))
+        self.assertEqual(cache.get(9), 9)
 
 
 # memcached backend isn't guaranteed to be available.
@@ -1809,10 +1855,7 @@ class CacheI18nTest(TestCase):
     @override_settings(USE_I18N=False, USE_L10N=False, USE_TZ=True)
     def test_cache_key_i18n_timezone(self):
         request = self.factory.get(self.path)
-        # This is tightly coupled to the implementation,
-        # but it's the most straightforward way to test the key.
         tz = timezone.get_current_timezone_name()
-        tz = tz.encode('ascii', 'ignore').decode('ascii').replace(' ', '_')
         response = HttpResponse()
         key = learn_cache_key(request, response)
         self.assertIn(tz, key, "Cache keys should include the time zone name when time zones are active")
@@ -1824,36 +1867,10 @@ class CacheI18nTest(TestCase):
         request = self.factory.get(self.path)
         lang = translation.get_language()
         tz = timezone.get_current_timezone_name()
-        tz = tz.encode('ascii', 'ignore').decode('ascii').replace(' ', '_')
         response = HttpResponse()
         key = learn_cache_key(request, response)
         self.assertNotIn(lang, key, "Cache keys shouldn't include the language name when i18n isn't active")
         self.assertNotIn(tz, key, "Cache keys shouldn't include the time zone name when i18n isn't active")
-
-    @override_settings(USE_I18N=False, USE_L10N=False, USE_TZ=True)
-    def test_cache_key_with_non_ascii_tzname(self):
-        # Timezone-dependent cache keys should use ASCII characters only
-        # (#17476). The implementation here is a bit odd (timezone.utc is an
-        # instance, not a class), but it simulates the correct conditions.
-        class CustomTzName(timezone.utc):
-            pass
-
-        request = self.factory.get(self.path)
-        response = HttpResponse()
-        with timezone.override(CustomTzName):
-            CustomTzName.zone = 'Hora estándar de Argentina'.encode('UTF-8')  # UTF-8 string
-            sanitized_name = 'Hora_estndar_de_Argentina'
-            self.assertIn(
-                sanitized_name, learn_cache_key(request, response),
-                "Cache keys should include the time zone name when time zones are active"
-            )
-
-            CustomTzName.name = 'Hora estándar de Argentina'    # unicode
-            sanitized_name = 'Hora_estndar_de_Argentina'
-            self.assertIn(
-                sanitized_name, learn_cache_key(request, response),
-                "Cache keys should include the time zone name when time zones are active"
-            )
 
     @override_settings(
         CACHE_MIDDLEWARE_KEY_PREFIX="test",
@@ -2116,6 +2133,15 @@ class CacheMiddlewareTest(SimpleTestCase):
         # .. even if it has a prefix
         response = other_with_prefix_view(request, '16')
         self.assertEqual(response.content, b'Hello World 16')
+
+    def test_cached_control_private_not_cached(self):
+        """Responses with 'Cache-Control: private' are not cached."""
+        view_with_private_cache = cache_page(3)(cache_control(private=True)(hello_world_view))
+        request = self.factory.get('/view/')
+        response = view_with_private_cache(request, '1')
+        self.assertEqual(response.content, b'Hello World 1')
+        response = view_with_private_cache(request, '2')
+        self.assertEqual(response.content, b'Hello World 2')
 
     def test_sensitive_cookie_not_cached(self):
         """

@@ -8,9 +8,11 @@ from django.contrib.admin.tests import AdminSeleniumTestCase
 from django.contrib.admin.views.main import ALL_VAR, SEARCH_VAR
 from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
+from django.db.models import F
 from django.db.models.fields import Field, IntegerField
+from django.db.models.functions import Upper
 from django.db.models.lookups import Contains, Exact
-from django.template import Context, Template
+from django.template import Context, Template, TemplateSyntaxError
 from django.test import TestCase, override_settings
 from django.test.client import RequestFactory
 from django.urls import reverse
@@ -37,7 +39,7 @@ def build_tbody_html(pk, href, extra_fields):
         '<tbody><tr class="row1">'
         '<td class="action-checkbox">'
         '<input type="checkbox" name="_selected_action" value="{}" '
-        'class="action-select" /></td>'
+        'class="action-select"></td>'
         '<th class="field-name"><a href="{}">name</a></th>'
         '{}</tr></tbody>'
     ).format(pk, href, extra_fields)
@@ -56,6 +58,20 @@ class ChangeListTests(TestCase):
         request = self.factory.get(url)
         request.user = user
         return request
+
+    def test_specified_ordering_by_f_expression(self):
+        class OrderedByFBandAdmin(admin.ModelAdmin):
+            list_display = ['name', 'genres', 'nr_of_members']
+            ordering = (
+                F('nr_of_members').desc(nulls_last=True),
+                Upper(F('name')).asc(),
+                F('genres').asc(),
+            )
+
+        m = OrderedByFBandAdmin(Band, custom_site)
+        request = self.factory.get('/band/')
+        cl = m.get_changelist_instance(request)
+        self.assertEqual(cl.get_ordering_field_columns(), {3: 'desc', 2: 'asc'})
 
     def test_select_related_preserved(self):
         """
@@ -103,7 +119,7 @@ class ChangeListTests(TestCase):
         cl = m.get_changelist_instance(request)
         cl.formset = None
         template = Template('{% load admin_list %}{% spaceless %}{% result_list cl %}{% endspaceless %}')
-        context = Context({'cl': cl})
+        context = Context({'cl': cl, 'opts': Child._meta})
         table_output = template.render(context)
         link = reverse('admin:admin_changelist_child_change', args=(new_child.id,))
         row_html = build_tbody_html(new_child.id, link, '<td class="field-parent nowrap">-</td>')
@@ -121,7 +137,7 @@ class ChangeListTests(TestCase):
         cl = m.get_changelist_instance(request)
         cl.formset = None
         template = Template('{% load admin_list %}{% spaceless %}{% result_list cl %}{% endspaceless %}')
-        context = Context({'cl': cl})
+        context = Context({'cl': cl, 'opts': Child._meta})
         table_output = template.render(context)
         link = reverse('admin:admin_changelist_child_change', args=(new_child.id,))
         row_html = build_tbody_html(new_child.id, link, '<td class="field-parent nowrap">???</td>')
@@ -137,7 +153,7 @@ class ChangeListTests(TestCase):
         cl = m.get_changelist_instance(request)
         cl.formset = None
         template = Template('{% load admin_list %}{% spaceless %}{% result_list cl %}{% endspaceless %}')
-        context = Context({'cl': cl})
+        context = Context({'cl': cl, 'opts': Child._meta})
         table_output = template.render(context)
         link = reverse('admin:admin_changelist_child_change', args=(new_child.id,))
         row_html = build_tbody_html(
@@ -160,7 +176,7 @@ class ChangeListTests(TestCase):
         cl = m.get_changelist_instance(request)
         cl.formset = None
         template = Template('{% load admin_list %}{% spaceless %}{% result_list cl %}{% endspaceless %}')
-        context = Context({'cl': cl})
+        context = Context({'cl': cl, 'opts': Child._meta})
         table_output = template.render(context)
         link = reverse('admin:admin_changelist_child_change', args=(new_child.id,))
         row_html = build_tbody_html(new_child.id, link, '<td class="field-parent nowrap">%s</td>' % new_parent)
@@ -188,12 +204,12 @@ class ChangeListTests(TestCase):
         FormSet = m.get_changelist_formset(request)
         cl.formset = FormSet(queryset=cl.result_list)
         template = Template('{% load admin_list %}{% spaceless %}{% result_list cl %}{% endspaceless %}')
-        context = Context({'cl': cl})
+        context = Context({'cl': cl, 'opts': Child._meta})
         table_output = template.render(context)
         # make sure that hidden fields are in the correct place
         hiddenfields_div = (
             '<div class="hiddenfields">'
-            '<input type="hidden" name="form-0-id" value="%d" id="id_form-0-id" />'
+            '<input type="hidden" name="form-0-id" value="%d" id="id_form-0-id">'
             '</div>'
         ) % new_child.id
         self.assertInHTML(hiddenfields_div, table_output, msg_prefix='Failed to find hidden fields')
@@ -201,7 +217,7 @@ class ChangeListTests(TestCase):
         # make sure that list editable fields are rendered in divs correctly
         editable_name_field = (
             '<input name="form-0-name" value="name" class="vTextField" '
-            'maxlength="30" type="text" id="id_form-0-name" />'
+            'maxlength="30" type="text" id="id_form-0-name">'
         )
         self.assertInHTML(
             '<td class="field-name">%s</td>' % editable_name_field,
@@ -877,34 +893,24 @@ class ChangeListTests(TestCase):
         self.assertNotIn('Add ', response.rendered_content)
 
 
-class AdminLogNodeTestCase(TestCase):
+class GetAdminLogTests(TestCase):
 
-    def test_get_admin_log_templatetag_custom_user(self):
+    def test_custom_user_pk_not_named_id(self):
         """
-        Regression test for ticket #20088: admin log depends on User model
-        having id field as primary key.
-
-        The old implementation raised an AttributeError when trying to use
-        the id field.
+        {% get_admin_log %} works if the user model's primary key isn't named
+        'id'.
         """
         context = Context({'user': CustomIdUser()})
-        template_string = '{% load log %}{% get_admin_log 10 as admin_log for_user user %}'
-
-        template = Template(template_string)
-
-        # Rendering should be u'' since this templatetag just logs,
-        # it doesn't render any string.
+        template = Template('{% load log %}{% get_admin_log 10 as admin_log for_user user %}')
+        # This template tag just logs.
         self.assertEqual(template.render(context), '')
 
-    def test_get_admin_log_templatetag_no_user(self):
-        """
-        The {% get_admin_log %} tag should work without specifying a user.
-        """
+    def test_no_user(self):
+        """{% get_admin_log %} works without specifying a user."""
         user = User(username='jondoe', password='secret', email='super@example.com')
         user.save()
         ct = ContentType.objects.get_for_model(User)
         LogEntry.objects.log_action(user.pk, ct.pk, user.pk, repr(user), 1)
-
         t = Template(
             '{% load log %}'
             '{% get_admin_log 100 as admin_log %}'
@@ -913,6 +919,26 @@ class AdminLogNodeTestCase(TestCase):
             '{% endfor %}'
         )
         self.assertEqual(t.render(Context({})), 'Added "<User: jondoe>".')
+
+    def test_missing_args(self):
+        msg = "'get_admin_log' statements require two arguments"
+        with self.assertRaisesMessage(TemplateSyntaxError, msg):
+            Template('{% load log %}{% get_admin_log 10 as %}')
+
+    def test_non_integer_limit(self):
+        msg = "First argument to 'get_admin_log' must be an integer"
+        with self.assertRaisesMessage(TemplateSyntaxError, msg):
+            Template('{% load log %}{% get_admin_log "10" as admin_log for_user user %}')
+
+    def test_without_as(self):
+        msg = "Second argument to 'get_admin_log' must be 'as'"
+        with self.assertRaisesMessage(TemplateSyntaxError, msg):
+            Template('{% load log %}{% get_admin_log 10 ad admin_log for_user user %}')
+
+    def test_without_for_user(self):
+        msg = "Fourth argument to 'get_admin_log' must be 'for_user'"
+        with self.assertRaisesMessage(TemplateSyntaxError, msg):
+            Template('{% load log %}{% get_admin_log 10 as admin_log foruser user %}')
 
 
 @override_settings(ROOT_URLCONF='admin_changelist.urls')

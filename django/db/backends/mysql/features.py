@@ -7,7 +7,8 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     update_can_self_select = False
     allows_group_by_pk = True
     related_fields_match_type = True
-    allow_sliced_subqueries = False
+    # MySQL doesn't support sliced subqueries with IN/ALL/ANY/SOME.
+    allow_sliced_subqueries_with_in = False
     has_select_for_update = True
     has_select_for_update_nowait = False
     supports_forward_references = False
@@ -17,6 +18,7 @@ class DatabaseFeatures(BaseDatabaseFeatures):
     can_introspect_binary_field = False
     can_introspect_small_integer_field = True
     can_introspect_positive_integer_field = True
+    introspected_boolean_field_type = 'IntegerField'
     supports_index_column_ordering = False
     supports_timezones = False
     requires_explicit_null_ordering_when_grouping = True
@@ -66,9 +68,6 @@ class DatabaseFeatures(BaseDatabaseFeatures):
         with self.connection.cursor() as cursor:
             cursor.execute("SELECT 1 FROM mysql.time_zone LIMIT 1")
             return cursor.fetchone() is not None
-
-    def introspected_boolean_field_type(self, *args, **kwargs):
-        return 'IntegerField'
 
     @cached_property
     def is_sql_auto_is_null_enabled(self):

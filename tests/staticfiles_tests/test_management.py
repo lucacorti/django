@@ -15,7 +15,7 @@ from django.contrib.staticfiles.management.commands import (
     collectstatic, runserver,
 )
 from django.core.exceptions import ImproperlyConfigured
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 from django.test import override_settings
 from django.test.utils import extend_sys_path
 from django.utils import timezone
@@ -237,6 +237,12 @@ class TestInteractiveMessages(CollectionTestCase):
         self.assertNotIn(self.delete_warning_msg, output)
         self.assertIn(self.files_copied_msg, output)
 
+    def test_cancelled(self):
+        self.run_collectstatic()
+        with mock.patch('builtins.input', side_effect=lambda _: 'no'):
+            with self.assertRaisesMessage(CommandError, 'Collecting static files cancelled'):
+                call_command('collectstatic', interactive=True)
+
 
 class TestCollectionExcludeNoDefaultIgnore(TestDefaults, CollectionTestCase):
     """
@@ -313,7 +319,8 @@ class TestCollectionFilesOverride(CollectionTestCase):
         os.utime(self.testfile_path, (self.orig_atime - 1, self.orig_mtime - 1))
 
         self.settings_with_test_app = self.modify_settings(
-            INSTALLED_APPS={'prepend': 'staticfiles_test_app'})
+            INSTALLED_APPS={'prepend': 'staticfiles_test_app'},
+        )
         with extend_sys_path(self.temp_dir):
             self.settings_with_test_app.enable()
 
@@ -467,3 +474,8 @@ class TestCollectionLinks(TestDefaults, CollectionTestCase):
         os.symlink(nonexistent_file_path, broken_symlink_path)
         self.run_collectstatic(clear=True)
         self.assertFalse(os.path.lexists(broken_symlink_path))
+
+    @override_settings(STATICFILES_STORAGE='staticfiles_tests.storage.PathNotImplementedStorage')
+    def test_no_remote_link(self):
+        with self.assertRaisesMessage(CommandError, "Can't symlink to a remote destination."):
+            self.run_collectstatic()

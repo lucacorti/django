@@ -54,7 +54,7 @@ class RegexValidator:
         Validate that the input contains (or does *not* contain, if
         inverse_match is True) a match for the regular expression.
         """
-        regex_matches = bool(self.regex.search(str(value)))
+        regex_matches = self.regex.search(str(value))
         invalid_input = regex_matches if self.inverse_match else not regex_matches
         if invalid_input:
             raise ValidationError(self.message, code=self.code)
@@ -391,6 +391,7 @@ class DecimalValidator:
     expected, otherwise raise ValidationError.
     """
     messages = {
+        'invalid': _('Enter a number.'),
         'max_digits': ngettext_lazy(
             'Ensure that there are no more than %(max)s digit in total.',
             'Ensure that there are no more than %(max)s digits in total.',
@@ -414,6 +415,8 @@ class DecimalValidator:
 
     def __call__(self, value):
         digit_tuple, exponent = value.as_tuple()[1:]
+        if exponent in {'F', 'n', 'N'}:
+            raise ValidationError(self.messages['invalid'])
         if exponent >= 0:
             # A positive exponent adds that many trailing zeros.
             digits = len(digit_tuple) + exponent
@@ -507,9 +510,8 @@ def get_available_image_extensions():
         return [ext.lower()[1:] for ext in Image.EXTENSION]
 
 
-validate_image_file_extension = FileExtensionValidator(
-    allowed_extensions=get_available_image_extensions(),
-)
+def validate_image_file_extension(value):
+    return FileExtensionValidator(allowed_extensions=get_available_image_extensions())(value)
 
 
 @deconstructible

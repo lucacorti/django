@@ -666,32 +666,34 @@ class ModelAdminTests(TestCase):
         finally:
             self.site.unregister(Band)
 
+    def test_get_deleted_objects(self):
+        mock_request = MockRequest()
+        mock_request.user = User.objects.create_superuser(username='bob', email='bob@test.com', password='test')
+        ma = ModelAdmin(Band, self.site)
+        deletable_objects, model_count, perms_needed, protected = ma.get_deleted_objects([self.band], request)
+        self.assertEqual(deletable_objects, ['Band: The Doors'])
+        self.assertEqual(model_count, {'bands': 1})
+        self.assertEqual(perms_needed, set())
+        self.assertEqual(protected, [])
+
 
 class ModelAdminPermissionTests(SimpleTestCase):
 
     class MockUser:
         def has_module_perms(self, app_label):
-            if app_label == "modeladmin":
-                return True
-            return False
+            return app_label == 'modeladmin'
 
     class MockAddUser(MockUser):
         def has_perm(self, perm):
-            if perm == "modeladmin.add_band":
-                return True
-            return False
+            return perm == 'modeladmin.add_band'
 
     class MockChangeUser(MockUser):
         def has_perm(self, perm):
-            if perm == "modeladmin.change_band":
-                return True
-            return False
+            return perm == 'modeladmin.change_band'
 
     class MockDeleteUser(MockUser):
         def has_perm(self, perm):
-            if perm == "modeladmin.delete_band":
-                return True
-            return False
+            return perm == 'modeladmin.delete_band'
 
     def test_has_add_permission(self):
         """

@@ -6,6 +6,7 @@ import json
 
 from django import forms
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db.models.deletion import CASCADE
 from django.urls import reverse
 from django.urls.exceptions import NoReverseMatch
@@ -62,10 +63,8 @@ class AdminDateWidget(forms.DateInput):
         return forms.Media(js=["admin/js/%s" % path for path in js])
 
     def __init__(self, attrs=None, format=None):
-        final_attrs = {'class': 'vDateField', 'size': '10'}
-        if attrs is not None:
-            final_attrs.update(attrs)
-        super().__init__(attrs=final_attrs, format=format)
+        attrs = {'class': 'vDateField', 'size': '10', **(attrs or {})}
+        super().__init__(attrs=attrs, format=format)
 
 
 class AdminTimeWidget(forms.TimeInput):
@@ -81,10 +80,8 @@ class AdminTimeWidget(forms.TimeInput):
         return forms.Media(js=["admin/js/%s" % path for path in js])
 
     def __init__(self, attrs=None, format=None):
-        final_attrs = {'class': 'vTimeField', 'size': '8'}
-        if attrs is not None:
-            final_attrs.update(attrs)
-        super().__init__(attrs=final_attrs, format=format)
+        attrs = {'class': 'vTimeField', 'size': '8', **(attrs or {})}
+        super().__init__(attrs=attrs, format=format)
 
 
 class AdminSplitDateTime(forms.SplitDateTimeWidget):
@@ -187,7 +184,7 @@ class ForeignKeyRawIdWidget(forms.TextInput):
         key = self.rel.get_related_field().name
         try:
             obj = self.rel.model._default_manager.using(self.db).get(**{key: value})
-        except (ValueError, self.rel.model.DoesNotExist):
+        except (ValueError, self.rel.model.DoesNotExist, ValidationError):
             return '', ''
 
         try:
@@ -328,36 +325,24 @@ class RelatedFieldWidgetWrapper(forms.Widget):
 
 class AdminTextareaWidget(forms.Textarea):
     def __init__(self, attrs=None):
-        final_attrs = {'class': 'vLargeTextField'}
-        if attrs is not None:
-            final_attrs.update(attrs)
-        super().__init__(attrs=final_attrs)
+        super().__init__(attrs={'class': 'vLargeTextField', **(attrs or {})})
 
 
 class AdminTextInputWidget(forms.TextInput):
     def __init__(self, attrs=None):
-        final_attrs = {'class': 'vTextField'}
-        if attrs is not None:
-            final_attrs.update(attrs)
-        super().__init__(attrs=final_attrs)
+        super().__init__(attrs={'class': 'vTextField', **(attrs or {})})
 
 
 class AdminEmailInputWidget(forms.EmailInput):
     def __init__(self, attrs=None):
-        final_attrs = {'class': 'vTextField'}
-        if attrs is not None:
-            final_attrs.update(attrs)
-        super().__init__(attrs=final_attrs)
+        super().__init__(attrs={'class': 'vTextField', **(attrs or {})})
 
 
 class AdminURLFieldWidget(forms.URLInput):
     template_name = 'admin/widgets/url.html'
 
     def __init__(self, attrs=None):
-        final_attrs = {'class': 'vURLField'}
-        if attrs is not None:
-            final_attrs.update(attrs)
-        super().__init__(attrs=final_attrs)
+        super().__init__(attrs={'class': 'vURLField', **(attrs or {})})
 
     def get_context(self, name, value, attrs):
         context = super().get_context(name, value, attrs)
@@ -371,10 +356,7 @@ class AdminIntegerFieldWidget(forms.NumberInput):
     class_name = 'vIntegerField'
 
     def __init__(self, attrs=None):
-        final_attrs = {'class': self.class_name}
-        if attrs is not None:
-            final_attrs.update(attrs)
-        super().__init__(attrs=final_attrs)
+        super().__init__(attrs={'class': self.class_name, **(attrs or {})})
 
 
 class AdminBigIntegerFieldWidget(AdminIntegerFieldWidget):
@@ -389,8 +371,9 @@ SELECT2_TRANSLATIONS = {x.lower(): x for x in [
     'eu', 'fa', 'fi', 'fr', 'gl', 'he', 'hi', 'hr', 'hu', 'id', 'is',
     'it', 'ja', 'km', 'ko', 'lt', 'lv', 'mk', 'ms', 'nb', 'nl', 'pl',
     'pt-BR', 'pt', 'ro', 'ru', 'sk', 'sr-Cyrl', 'sr', 'sv', 'th',
-    'tr', 'uk', 'vi', 'zh-CN', 'zh-TW',
+    'tr', 'uk', 'vi',
 ]}
+SELECT2_TRANSLATIONS.update({'zh-hans': 'zh-CN', 'zh-hant': 'zh-TW'})
 
 
 class AutocompleteMixin:
@@ -407,10 +390,7 @@ class AutocompleteMixin:
         self.admin_site = admin_site
         self.db = using
         self.choices = choices
-        if attrs is not None:
-            self.attrs = attrs.copy()
-        else:
-            self.attrs = {}
+        self.attrs = {} if attrs is None else attrs.copy()
 
     def get_url(self):
         model = self.rel.model
@@ -433,7 +413,7 @@ class AutocompleteMixin:
             'data-theme': 'admin-autocomplete',
             'data-allow-clear': json.dumps(not self.is_required),
             'data-placeholder': '',  # Allows clearing of the input.
-            'class': attrs['class'] + 'admin-autocomplete',
+            'class': attrs['class'] + (' ' if attrs['class'] else '') + 'admin-autocomplete',
         })
         return attrs
 
@@ -457,8 +437,7 @@ class AutocompleteMixin:
                 str(option_value) in value and
                 (has_selected is False or self.allow_multiple_selected)
             )
-            if selected is True and has_selected is False:
-                has_selected = True
+            has_selected |= selected
             index = len(default[1])
             subgroup = default[1]
             subgroup.append(self.create_option(name, option_value, option_label, selected_choices, index))

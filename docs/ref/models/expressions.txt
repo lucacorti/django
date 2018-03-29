@@ -13,9 +13,13 @@ more complex computations.
 Supported arithmetic
 ====================
 
-Django supports addition, subtraction, multiplication, division, modulo
-arithmetic, and the power operator on query expressions, using Python constants,
-variables, and even other expressions.
+Django supports negation, addition, subtraction, multiplication, division,
+modulo arithmetic, and the power operator on query expressions, using Python
+constants, variables, and even other expressions.
+
+.. versionchanged:: 2.1
+
+    Support for negation was added.
 
 Some examples
 =============
@@ -60,10 +64,14 @@ Some examples
     # Aggregates can contain complex computations also
     Company.objects.annotate(num_offerings=Count(F('products') + F('services')))
 
-    # Expressions can also be used in order_by()
+    # Expressions can also be used in order_by(), either directly
     Company.objects.order_by(Length('name').asc())
     Company.objects.order_by(Length('name').desc())
-
+    # or using the double underscore lookup syntax.
+    from django.db.models import CharField
+    from django.db.models.functions import Length
+    CharField.register_lookup(Length)
+    Company.objects.order_by('name__length')
 
 Built-in Expressions
 ====================
@@ -743,7 +751,7 @@ to reduce repetition::
     >>> from django.db.models import Avg, F, Max, Min, Window
     >>> from django.db.models.functions import ExtractYear
     >>> window = {
-    >>>    'partition': [F('studio'), F('genre')],
+    >>>    'partition_by': [F('studio'), F('genre')],
     >>>    'order_by': ExtractYear('released').asc(),
     >>> }
     >>> Movie.objects.annotate(

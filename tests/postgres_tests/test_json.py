@@ -141,6 +141,31 @@ class TestQuerying(PostgreSQLTestCase):
             [self.objs[0]]
         )
 
+    def test_ordering_by_transform(self):
+        objs = [
+            JSONModel.objects.create(field={'ord': 93, 'name': 'bar'}),
+            JSONModel.objects.create(field={'ord': 22.1, 'name': 'foo'}),
+            JSONModel.objects.create(field={'ord': -1, 'name': 'baz'}),
+            JSONModel.objects.create(field={'ord': 21.931902, 'name': 'spam'}),
+            JSONModel.objects.create(field={'ord': -100291029, 'name': 'eggs'}),
+        ]
+        query = JSONModel.objects.filter(field__name__isnull=False).order_by('field__ord')
+        self.assertSequenceEqual(query, [objs[4], objs[2], objs[3], objs[1], objs[0]])
+
+    def test_deep_values(self):
+        query = JSONModel.objects.values_list('field__k__l')
+        self.assertSequenceEqual(
+            query,
+            [
+                (None,), (None,), (None,), (None,), (None,), (None,),
+                (None,), (None,), ('m',), (None,), (None,), (None,),
+            ]
+        )
+
+    def test_deep_distinct(self):
+        query = JSONModel.objects.distinct('field__k__l').values_list('field__k__l')
+        self.assertSequenceEqual(query, [('m',), (None,)])
+
     def test_isnull_key(self):
         # key__isnull works the same as has_key='key'.
         self.assertSequenceEqual(
@@ -298,18 +323,28 @@ class TestChecks(PostgreSQLTestCase):
 
 class TestSerialization(PostgreSQLTestCase):
     test_data = (
-        '[{"fields": {"field": {"a": "b", "c": null}, "field_custom": null}, '
+        '[{"fields": {"field": %s, "field_custom": null}, '
         '"model": "postgres_tests.jsonmodel", "pk": null}]'
+    )
+    test_values = (
+        # (Python value, serialized value),
+        ({'a': 'b', 'c': None}, '{"a": "b", "c": null}'),
+        ('abc', '"abc"'),
+        ('{"a": "a"}', '"{\\"a\\": \\"a\\"}"'),
     )
 
     def test_dumping(self):
-        instance = JSONModel(field={'a': 'b', 'c': None})
-        data = serializers.serialize('json', [instance])
-        self.assertJSONEqual(data, self.test_data)
+        for value, serialized in self.test_values:
+            with self.subTest(value=value):
+                instance = JSONModel(field=value)
+                data = serializers.serialize('json', [instance])
+                self.assertJSONEqual(data, self.test_data % serialized)
 
     def test_loading(self):
-        instance = list(serializers.deserialize('json', self.test_data))[0].object
-        self.assertEqual(instance.field, {'a': 'b', 'c': None})
+        for value, serialized in self.test_values:
+            with self.subTest(value=value):
+                instance = list(serializers.deserialize('json', self.test_data % serialized))[0].object
+                self.assertEqual(instance.field, value)
 
 
 class TestValidation(PostgreSQLTestCase):

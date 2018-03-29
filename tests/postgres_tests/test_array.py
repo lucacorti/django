@@ -309,6 +309,22 @@ class TestQuerying(PostgreSQLTestCase):
             self.objs[2:3]
         )
 
+    def test_order_by_slice(self):
+        more_objs = (
+            NullableIntegerArrayModel.objects.create(field=[1, 637]),
+            NullableIntegerArrayModel.objects.create(field=[2, 1]),
+            NullableIntegerArrayModel.objects.create(field=[3, -98123]),
+            NullableIntegerArrayModel.objects.create(field=[4, 2]),
+        )
+        self.assertSequenceEqual(
+            NullableIntegerArrayModel.objects.order_by('field__1'),
+            [
+                more_objs[2], more_objs[1], more_objs[3], self.objs[2],
+                self.objs[3], more_objs[0], self.objs[4], self.objs[1],
+                self.objs[0],
+            ]
+        )
+
     @unittest.expectedFailure
     def test_slice_nested(self):
         instance = NestedIntegerArrayModel.objects.create(field=[[1, 2], [3, 4]])
@@ -805,9 +821,9 @@ class TestSplitFormField(PostgreSQLTestCase):
             <tr>
                 <th><label for="id_array_0">Array:</label></th>
                 <td>
-                    <input id="id_array_0" name="array_0" type="text" required />
-                    <input id="id_array_1" name="array_1" type="text" required />
-                    <input id="id_array_2" name="array_2" type="text" required />
+                    <input id="id_array_0" name="array_0" type="text" required>
+                    <input id="id_array_1" name="array_1" type="text" required>
+                    <input id="id_array_2" name="array_2" type="text" required>
                 </td>
             </tr>
         ''')
@@ -876,8 +892,8 @@ class TestSplitFormWidget(PostgreSQLWidgetTestCase):
         self.check_html(
             SplitArrayWidget(forms.TextInput(), size=2), 'array', None,
             """
-            <input name="array_0" type="text" />
-            <input name="array_1" type="text" />
+            <input name="array_0" type="text">
+            <input name="array_1" type="text">
             """
         )
 
@@ -887,8 +903,8 @@ class TestSplitFormWidget(PostgreSQLWidgetTestCase):
             'array', ['val1', 'val2'], attrs={'id': 'foo'},
             html=(
                 """
-                <input id="foo_0" name="array_0" type="text" value="val1" />
-                <input id="foo_1" name="array_1" type="text" value="val2" />
+                <input id="foo_0" name="array_0" type="text" value="val1">
+                <input id="foo_1" name="array_1" type="text" value="val2">
                 """
             )
         )

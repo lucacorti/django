@@ -151,8 +151,8 @@ class DatabaseWrapper(BaseDatabaseWrapper):
                 "Please supply the NAME value.")
         conn_params = {
             'database': settings_dict['NAME'] or 'postgres',
+            **settings_dict['OPTIONS'],
         }
-        conn_params.update(settings_dict['OPTIONS'])
         conn_params.pop('isolation_level', None)
         if settings_dict['USER']:
             conn_params['user'] = settings_dict['USER']
@@ -263,7 +263,8 @@ class DatabaseWrapper(BaseDatabaseWrapper):
             nodb_connection = self.__class__(
                 self.settings_dict.copy(),
                 alias=self.alias,
-                allow_thread_sharing=False)
+                allow_thread_sharing=False,
+            )
         return nodb_connection
 
     @cached_property

@@ -111,6 +111,7 @@ class BaseModelAdmin(metaclass=forms.MediaDefiningClass):
     formfield_overrides = {}
     readonly_fields = ()
     ordering = None
+    sortable_by = None
     view_on_site = True
     show_full_result_count = True
     checks_class = BaseModelAdminChecks
@@ -145,7 +146,7 @@ class BaseModelAdmin(metaclass=forms.MediaDefiningClass):
             # formfield_overrides because **kwargs is more specific, and should
             # always win.
             if db_field.__class__ in self.formfield_overrides:
-                kwargs = dict(self.formfield_overrides[db_field.__class__], **kwargs)
+                kwargs = {**self.formfield_overrides[db_field.__class__], **kwargs}
 
             # Get the correct formfield.
             if isinstance(db_field, models.ForeignKey):
@@ -176,7 +177,7 @@ class BaseModelAdmin(metaclass=forms.MediaDefiningClass):
         # passed to formfield_for_dbfield override the defaults.
         for klass in db_field.__class__.mro():
             if klass in self.formfield_overrides:
-                kwargs = dict(copy.deepcopy(self.formfield_overrides[klass]), **kwargs)
+                kwargs = {**copy.deepcopy(self.formfield_overrides[klass]), **kwargs}
                 return db_field.formfield(**kwargs)
 
         # For any other type of field, just call its formfield() method.
@@ -353,6 +354,10 @@ class BaseModelAdmin(metaclass=forms.MediaDefiningClass):
             qs = qs.order_by(*ordering)
         return qs
 
+    def get_sortable_by(self, request):
+        """Hook for specifying which fields can be sorted in the changelist."""
+        return self.sortable_by if self.sortable_by is not None else self.get_list_display(request)
+
     def lookup_allowed(self, lookup, value):
         from django.contrib.admin.filters import SimpleListFilter
 
@@ -364,9 +369,8 @@ class BaseModelAdmin(metaclass=forms.MediaDefiningClass):
             # As ``limit_choices_to`` can be a callable, invoke it here.
             if callable(fk_lookup):
                 fk_lookup = fk_lookup()
-            for k, v in widgets.url_params_from_lookup_dict(fk_lookup).items():
-                if k == lookup and v == value:
-                    return True
+            if (lookup, value) in widgets.url_params_from_lookup_dict(fk_lookup).items():
+                return True
 
         relation_parts = []
         prev_field = None
@@ -654,12 +658,12 @@ class ModelAdmin(BaseModelAdmin):
         form = type(self.form.__name__, (self.form,), new_attrs)
 
         defaults = {
-            "form": form,
-            "fields": fields,
-            "exclude": exclude,
-            "formfield_callback": partial(self.formfield_for_dbfield, request=request),
+            'form': form,
+            'fields': fields,
+            'exclude': exclude,
+            'formfield_callback': partial(self.formfield_for_dbfield, request=request),
+            **kwargs,
         }
-        defaults.update(kwargs)
 
         if defaults['fields'] is None and not modelform_defines_fields(defaults['form']):
             defaults['fields'] = forms.ALL_FIELDS
@@ -689,6 +693,7 @@ class ModelAdmin(BaseModelAdmin):
         # Add the action checkboxes if any actions are available.
         if self.get_actions(request):
             list_display = ['action_checkbox'] + list(list_display)
+        sortable_by = self.get_sortable_by(request)
         ChangeList = self.get_changelist(request)
         return ChangeList(
             request,
@@ -703,6 +708,7 @@ class ModelAdmin(BaseModelAdmin):
             self.list_max_show_all,
             self.list_editable,
             self,
+            sortable_by,
         )
 
     def get_object(self, request, object_id, from_field=None):
@@ -725,9 +731,9 @@ class ModelAdmin(BaseModelAdmin):
         Return a Form class for use in the Formset on the changelist page.
         """
         defaults = {
-            "formfield_callback": partial(self.formfield_for_dbfield, request=request),
+            'formfield_callback': partial(self.formfield_for_dbfield, request=request),
+            **kwargs,
         }
-        defaults.update(kwargs)
         if defaults.get('fields') is None and not modelform_defines_fields(defaults.get('form')):
             defaults['fields'] = forms.ALL_FIELDS
 
@@ -739,9 +745,9 @@ class ModelAdmin(BaseModelAdmin):
         is used.
         """
         defaults = {
-            "formfield_callback": partial(self.formfield_for_dbfield, request=request),
+            'formfield_callback': partial(self.formfield_for_dbfield, request=request),
+            **kwargs,
         }
-        defaults.update(kwargs)
         return modelformset_factory(
             self.model, self.get_changelist_form(request), extra=0,
             fields=self.list_editable, **defaults
@@ -810,7 +816,7 @@ class ModelAdmin(BaseModelAdmin):
         A list_display column containing a checkbox widget.
         """
         return helpers.checkbox.render(helpers.ACTION_CHECKBOX_NAME, str(obj.pk))
-    action_checkbox.short_description = mark_safe('<input type="checkbox" id="action-toggle" />')
+    action_checkbox.short_description = mark_safe('<input type="checkbox" id="action-toggle">')
 
     def get_actions(self, request):
         """
@@ -832,22 +838,17 @@ class ModelAdmin(BaseModelAdmin):
         # Then gather them from the model admin and all parent classes,
         # starting with self and working back up.
         for klass in self.__class__.mro()[::-1]:
-            class_actions = getattr(klass, 'actions', [])
-            # Avoid trying to iterate over None
-            if not class_actions:
-                continue
+            class_actions = getattr(klass, 'actions', []) or []
             actions.extend(self.get_action(action) for action in class_actions)
 
         # get_action might have returned None, so filter any of those out.
         actions = filter(None, actions)
 
         # Convert the actions into an OrderedDict keyed by name.
-        actions = OrderedDict(
+        return OrderedDict(
             (name, (func, name, desc))
             for func, name, desc in actions
         )
-
-        return actions
 
     def get_action_choices(self, request, default_choices=BLANK_CHOICE_DASH):
         """
@@ -974,11 +975,7 @@ class ModelAdmin(BaseModelAdmin):
                 or_queries = [models.Q(**{orm_lookup: bit})
                               for orm_lookup in orm_lookups]
                 queryset = queryset.filter(reduce(operator.or_, or_queries))
-            if not use_distinct:
-                for search_spec in orm_lookups:
-                    if lookup_needs_distinct(self.opts, search_spec):
-                        use_distinct = True
-                        break
+            use_distinct |= any(lookup_needs_distinct(self.opts, search_spec) for search_spec in orm_lookups)
 
         return queryset, use_distinct
 
@@ -1049,6 +1046,10 @@ class ModelAdmin(BaseModelAdmin):
         Given a model instance delete it from the database.
         """
         obj.delete()
+
+    def delete_queryset(self, request, queryset):
+        """Given a queryset, delete it from the database."""
+        queryset.delete()
 
     def save_formset(self, request, form, formset, change):
         """
@@ -1501,11 +1502,10 @@ class ModelAdmin(BaseModelAdmin):
         ModelForm = self.get_form(request, obj)
         if request.method == 'POST':
             form = ModelForm(request.POST, request.FILES, instance=obj)
-            if form.is_valid():
-                form_validated = True
+            form_validated = form.is_valid()
+            if form_validated:
                 new_object = self.save_form(request, form, change=not add)
             else:
-                form_validated = False
                 new_object = form.instance
             formsets, inline_instances = self._create_formsets(request, new_object, change=not add)
             if all_valid(formsets) and form_validated:
@@ -1541,20 +1541,19 @@ class ModelAdmin(BaseModelAdmin):
         for inline_formset in inline_formsets:
             media = media + inline_formset.media
 
-        context = dict(
-            self.admin_site.each_context(request),
-            title=(_('Add %s') if add else _('Change %s')) % opts.verbose_name,
-            adminform=adminForm,
-            object_id=object_id,
-            original=obj,
-            is_popup=(IS_POPUP_VAR in request.POST or
-                      IS_POPUP_VAR in request.GET),
-            to_field=to_field,
-            media=media,
-            inline_admin_formsets=inline_formsets,
-            errors=helpers.AdminErrorList(form, formsets),
-            preserved_filters=self.get_preserved_filters(request),
-        )
+        context = {
+            **self.admin_site.each_context(request),
+            'title': (_('Add %s') if add else _('Change %s')) % opts.verbose_name,
+            'adminform': adminForm,
+            'object_id': object_id,
+            'original': obj,
+            'is_popup': IS_POPUP_VAR in request.POST or IS_POPUP_VAR in request.GET,
+            'to_field': to_field,
+            'media': media,
+            'inline_admin_formsets': inline_formsets,
+            'errors': helpers.AdminErrorList(form, formsets),
+            'preserved_filters': self.get_preserved_filters(request),
+        }
 
         # Hide the "Save" and "Save and continue" buttons if "Save as New" was
         # previously chosen to prevent the interface from getting confusing.
@@ -1701,25 +1700,25 @@ class ModelAdmin(BaseModelAdmin):
             cl.result_count
         )
 
-        context = dict(
-            self.admin_site.each_context(request),
-            module_name=str(opts.verbose_name_plural),
-            selection_note=_('0 of %(cnt)s selected') % {'cnt': len(cl.result_list)},
-            selection_note_all=selection_note_all % {'total_count': cl.result_count},
-            title=cl.title,
-            is_popup=cl.is_popup,
-            to_field=cl.to_field,
-            cl=cl,
-            media=media,
-            has_add_permission=self.has_add_permission(request),
-            opts=cl.opts,
-            action_form=action_form,
-            actions_on_top=self.actions_on_top,
-            actions_on_bottom=self.actions_on_bottom,
-            actions_selection_counter=self.actions_selection_counter,
-            preserved_filters=self.get_preserved_filters(request),
-        )
-        context.update(extra_context or {})
+        context = {
+            **self.admin_site.each_context(request),
+            'module_name': str(opts.verbose_name_plural),
+            'selection_note': _('0 of %(cnt)s selected') % {'cnt': len(cl.result_list)},
+            'selection_note_all': selection_note_all % {'total_count': cl.result_count},
+            'title': cl.title,
+            'is_popup': cl.is_popup,
+            'to_field': cl.to_field,
+            'cl': cl,
+            'media': media,
+            'has_add_permission': self.has_add_permission(request),
+            'opts': cl.opts,
+            'action_form': action_form,
+            'actions_on_top': self.actions_on_top,
+            'actions_on_bottom': self.actions_on_bottom,
+            'actions_selection_counter': self.actions_selection_counter,
+            'preserved_filters': self.get_preserved_filters(request),
+            **(extra_context or {}),
+        }
 
         request.current_app = self.admin_site.name
 
@@ -1728,6 +1727,13 @@ class ModelAdmin(BaseModelAdmin):
             'admin/%s/change_list.html' % app_label,
             'admin/change_list.html'
         ], context)
+
+    def get_deleted_objects(self, objs, request):
+        """
+        Hook for customizing the delete process for the delete view and the
+        "delete selected" action.
+        """
+        return get_deleted_objects(objs, request.user, self.admin_site)
 
     @csrf_protect_m
     def delete_view(self, request, object_id, extra_context=None):
@@ -1751,12 +1757,9 @@ class ModelAdmin(BaseModelAdmin):
         if obj is None:
             return self._get_obj_does_not_exist_redirect(request, opts, object_id)
 
-        using = router.db_for_write(self.model)
-
         # Populate deleted_objects, a data structure of all related objects that
         # will also be deleted.
-        (deleted_objects, model_count, perms_needed, protected) = get_deleted_objects(
-            [obj], opts, request.user, self.admin_site, using)
+        deleted_objects, model_count, perms_needed, protected = self.get_deleted_objects([obj], request)
 
         if request.POST and not protected:  # The user has confirmed the deletion.
             if perms_needed:
@@ -1776,23 +1779,22 @@ class ModelAdmin(BaseModelAdmin):
         else:
             title = _("Are you sure?")
 
-        context = dict(
-            self.admin_site.each_context(request),
-            title=title,
-            object_name=object_name,
-            object=obj,
-            deleted_objects=deleted_objects,
-            model_count=dict(model_count).items(),
-            perms_lacking=perms_needed,
-            protected=protected,
-            opts=opts,
-            app_label=app_label,
-            preserved_filters=self.get_preserved_filters(request),
-            is_popup=(IS_POPUP_VAR in request.POST or
-                      IS_POPUP_VAR in request.GET),
-            to_field=to_field,
-        )
-        context.update(extra_context or {})
+        context = {
+            **self.admin_site.each_context(request),
+            'title': title,
+            'object_name': object_name,
+            'object': obj,
+            'deleted_objects': deleted_objects,
+            'model_count': dict(model_count).items(),
+            'perms_lacking': perms_needed,
+            'protected': protected,
+            'opts': opts,
+            'app_label': app_label,
+            'preserved_filters': self.get_preserved_filters(request),
+            'is_popup': IS_POPUP_VAR in request.POST or IS_POPUP_VAR in request.GET,
+            'to_field': to_field,
+            **(extra_context or {}),
+        }
 
         return self.render_delete_form(request, context)
 
@@ -1816,16 +1818,16 @@ class ModelAdmin(BaseModelAdmin):
             content_type=get_content_type_for_model(model)
         ).select_related().order_by('action_time')
 
-        context = dict(
-            self.admin_site.each_context(request),
-            title=_('Change history: %s') % obj,
-            action_list=action_list,
-            module_name=str(capfirst(opts.verbose_name_plural)),
-            object=obj,
-            opts=opts,
-            preserved_filters=self.get_preserved_filters(request),
-        )
-        context.update(extra_context or {})
+        context = {
+            **self.admin_site.each_context(request),
+            'title': _('Change history: %s') % obj,
+            'action_list': action_list,
+            'module_name': str(capfirst(opts.verbose_name_plural)),
+            'object': obj,
+            'opts': opts,
+            'preserved_filters': self.get_preserved_filters(request),
+            **(extra_context or {}),
+        }
 
         request.current_app = self.admin_site.name
 
@@ -1938,19 +1940,19 @@ class InlineModelAdmin(BaseModelAdmin):
         exclude = exclude or None
         can_delete = self.can_delete and self.has_delete_permission(request, obj)
         defaults = {
-            "form": self.form,
-            "formset": self.formset,
-            "fk_name": self.fk_name,
-            "fields": fields,
-            "exclude": exclude,
-            "formfield_callback": partial(self.formfield_for_dbfield, request=request),
-            "extra": self.get_extra(request, obj, **kwargs),
-            "min_num": self.get_min_num(request, obj, **kwargs),
-            "max_num": self.get_max_num(request, obj, **kwargs),
-            "can_delete": can_delete,
+            'form': self.form,
+            'formset': self.formset,
+            'fk_name': self.fk_name,
+            'fields': fields,
+            'exclude': exclude,
+            'formfield_callback': partial(self.formfield_for_dbfield, request=request),
+            'extra': self.get_extra(request, obj, **kwargs),
+            'min_num': self.get_min_num(request, obj, **kwargs),
+            'max_num': self.get_max_num(request, obj, **kwargs),
+            'can_delete': can_delete,
+            **kwargs,
         }
 
-        defaults.update(kwargs)
         base_model_form = defaults['form']
 
         class DeleteProtectedModelForm(base_model_form):

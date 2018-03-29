@@ -564,9 +564,7 @@ class BaseModelFormSet(BaseFormSet):
                  queryset=None, *, initial=None, **kwargs):
         self.queryset = queryset
         self.initial_extra = initial
-        defaults = {'data': data, 'files': files, 'auto_id': auto_id, 'prefix': prefix}
-        defaults.update(kwargs)
-        super().__init__(**defaults)
+        super().__init__(**{'data': data, 'files': files, 'auto_id': auto_id, 'prefix': prefix, **kwargs})
 
     def initial_form_count(self):
         """Return the number of forms that are required in this FormSet."""
@@ -589,9 +587,8 @@ class BaseModelFormSet(BaseFormSet):
         return field.to_python
 
     def _construct_form(self, i, **kwargs):
-        pk_required = False
-        if i < self.initial_form_count():
-            pk_required = True
+        pk_required = i < self.initial_form_count()
+        if pk_required:
             if self.is_bound:
                 pk_key = '%s-%s' % (self.add_prefix(i), self.model._meta.pk.name)
                 try:
@@ -1133,9 +1130,9 @@ class ModelChoiceIterator:
     def __iter__(self):
         if self.field.empty_label is not None:
             yield ("", self.field.empty_label)
-        queryset = self.queryset.all()
+        queryset = self.queryset
         # Can't use iterator() when queryset uses prefetch_related()
-        if not queryset._prefetch_related_lookups:
+        if not queryset._prefetch_related_lookups and queryset._result_cache is None:
             queryset = queryset.iterator()
         for obj in queryset:
             yield self.choice(obj)
@@ -1197,7 +1194,7 @@ class ModelChoiceField(ChoiceField):
         return self._queryset
 
     def _set_queryset(self, queryset):
-        self._queryset = queryset
+        self._queryset = None if queryset is None else queryset.all()
         self.widget.choices = self.choices
 
     queryset = property(_get_queryset, _set_queryset)
@@ -1351,8 +1348,7 @@ class ModelMultipleChoiceField(ModelChoiceField):
 
 
 def modelform_defines_fields(form_class):
-    return (form_class is not None and (
-            hasattr(form_class, '_meta') and
-            (form_class._meta.fields is not None or
-             form_class._meta.exclude is not None)
-            ))
+    return hasattr(form_class, '_meta') and (
+        form_class._meta.fields is not None or
+        form_class._meta.exclude is not None
+    )
